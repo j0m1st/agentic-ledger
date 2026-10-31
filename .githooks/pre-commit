@@ -1,0 +1,9 @@
+#!/bin/sh
+# Blocks committing company data. Enable with: git config core.hooksPath .githooks
+bad=$(git diff --cached --name-only | grep -E '^books/' | grep -v '^books/README.md$')
+if [ -n "$bad" ]; then
+  echo "Refusing to commit company book data:" >&2
+  echo "$bad" >&2
+  echo "Keep books/ out of the public repo (see README > Keeping your books private)." >&2
+  exit 1
+fi

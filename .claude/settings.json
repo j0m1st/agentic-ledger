@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "ask": [
+      "Bash(python -m engine email-send:*)",
+      "Bash(python3 -m engine email-send:*)",
+      "Bash(.venv/bin/python -m engine email-send:*)",
+      "Bash(git push:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./**/*.pem)",
+      "Read(./**/*.key)",
+      "Bash(git add -f:*)",
+      "Bash(git add --force:*)"
+    ]
+  }
+}

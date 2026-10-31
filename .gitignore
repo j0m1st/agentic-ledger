@@ -1,0 +1,23 @@
+# --- Company data: NEVER commit. Keep your books in a private location. ---
+books/*
+!books/README.md
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+.claude/settings.local.json
