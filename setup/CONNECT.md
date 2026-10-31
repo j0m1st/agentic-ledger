@@ -15,7 +15,7 @@ Both paths work for every system. The API path also unlocks `python -m engine ru
 
 ## Rules for every path
 
-- **Least privilege.** Use a dedicated integration user/role with *view-only* permissions. Where scopes exist, pick `.read` scopes.
+- **Least privilege.** Start with a dedicated integration user/role with *view-only* permissions (`.read` scopes) for reverse-engineering. Add write permissions only when you want agent edits; see [Enabling writes](#enabling-writes).
 - **Secrets in the OS keychain**, not in files. `python -m engine auth <book>` prompts for secrets (hidden input) and stores them via `keyring` (macOS Keychain, Windows Credential Manager, Linux Secret Service). For CI or 1Password, use env vars `AL_<BOOK>_<KEY>` (for example `op run --env-file=...`).
 - **Never paste secrets into the agent chat** or into `claude mcp add ... --env KEY=secret`, which stores them in plaintext config. Use `python -m engine exec <book> -- <command>` to inject them from the keychain at runtime (examples below).
 - **Sandbox first** when the vendor offers one (QBO sandbox, Xero demo company, NetSuite sandbox account).
@@ -42,10 +42,10 @@ Add `--scope project` (Claude Code) only if the config contains no secrets. Thes
    claude mcp add qbo -- python -m engine exec acme -- npx -y <package-or-path-from-intuit-README>
    ```
    `engine exec` injects `QUICKBOOKS_CLIENT_ID/SECRET/REFRESH_TOKEN/REALM_ID/ENVIRONMENT`. Check the env names against the Intuit README. Caveat: if the server rotates the refresh token itself, re-run `engine auth`.
-3. The connector can write. The agent rules forbid writes, but review the connector's permission prompt and deny write tools if your client supports per-tool approval.
+3. The connector can write. Writes are only allowed through approved change sets (`playbooks/write-changes.md`). Keep your client's per-tool approval **on** for its write tools, and never set them to auto-allow.
 
 ### B. Direct API
-1. [developer.intuit.com](https://developer.intuit.com) › Dashboard › Create app › QuickBooks Online and Payments. Scope: `com.intuit.quickbooks.accounting`. This scope is read+write and there's no read-only option, so the engine enforces read-only in code.
+1. [developer.intuit.com](https://developer.intuit.com) › Dashboard › Create app › QuickBooks Online and Payments. Scope: `com.intuit.quickbooks.accounting`. This scope is read+write and there's no read-only option, so the engine blocks writes in code unless a change set has been approved.
 2. **Keys & credentials:** Development keys work against the sandbox. Production keys require completing Intuit's app profile/compliance questions.
 3. **Redirect URI:** sandbox can use `http://localhost:8080/callback`. Production must be HTTPS. Any HTTPS URL you control works, because you only copy the redirected URL from the browser bar. Intuit's playground URL `https://developer.intuit.com/v2/OAuth2Playground/RedirectUrl` also works.
 4. `python -m engine new acme --erp qbo && python -m engine auth acme`. It prints a consent URL; you approve, then paste the redirected URL back. The realm ID and refresh token are stored in the keychain.
@@ -55,13 +55,13 @@ Add `--scope project` (Claude Code) only if the config contains no secrets. Thes
 
 ### A. Connector (default)
 Official server: [XeroAPI/xero-mcp-server](https://github.com/XeroAPI/xero-mcp-server) (stdio, Node 18+).
-1. [developer.xero.com](https://developer.xero.com/app/manage) › New app › **Custom connection**. This is a paid Xero add-on, tied to one organisation, and region-limited, so check eligibility. Select **read-only scopes only**. Connections created on or after 29 Apr 2026 use the new granular scopes. Authorise it as an org admin.
+1. [developer.xero.com](https://developer.xero.com/app/manage) › New app › **Custom connection**. This is a paid Xero add-on, tied to one organisation, and region-limited, so check eligibility. Select **read-only scopes** for analysis, and add write scopes only if you'll enable writes. Connections created on or after 29 Apr 2026 use the new granular scopes. Authorise it as an org admin.
 2. `python -m engine new acme --erp xero && python -m engine auth acme` stores the client ID and secret in the keychain and tests the token.
 3. Register the server without writing secrets to config:
    ```bash
    claude mcp add xero -- python -m engine exec acme -- npx -y @xeroapi/xero-mcp-server@latest
    ```
-   The server exposes create/update/delete tools, so read-only scopes are your real guardrail.
+   The server exposes create/update/delete tools. With read-only scopes they fail safely; with write scopes, use them only through approved change sets.
 
 ### B. Direct API
 The Custom Connection from A1 doubles as the API credential (OAuth2 `client_credentials` at `https://identity.xero.com/connect/token`, no browser step, no tenant header). Run `python -m engine run acme`. Include `accounting.journals.read` in the connection's scopes; the full GL comes from `/Journals`. Rate limits are 60 calls/min and 5,000/day, and the engine backs off automatically.
@@ -94,9 +94,28 @@ The Custom Connection from A1 doubles as the API credential (OAuth2 `client_cred
 1. Install the **MCP Standard Tools** SuiteApp (SuiteApp Marketplace).
 2. Create a custom role (Administrator is blocked) with *MCP Server Connection*, *OAuth 2.0 Access Tokens* and the view permissions above.
 3. Claude: Settings › Connectors › add **NetSuite**, or add a custom connector with the account's MCP URL (`https://<accountid>.suitetalk.api.netsuite.com/services/mcp/v1/all`, account ID lowercase with `_` → `-`; confirm in NetSuite Help › "AI Connector Service"). Claude Code: `claude mcp add --transport http netsuite <url>`, then `/mcp` to sign in.
-4. Tools run under that role's permissions. Keep the role view-only.
+4. Tools run under that role's permissions. Keep the role view-only unless you enable writes.
 
 ---
+
+## Enabling writes
+
+Off by default. The agent can only write via approved change sets: full preview → you reply `approve <code>` → apply → ✅/❌/🚨/⏭️ report, with each record signed `[ag write/edit]`. See `playbooks/write-changes.md`.
+
+1. **Grant write access, as narrowly as possible:**
+
+   | System | What to grant |
+   |---|---|
+   | QBO | Nothing extra (the accounting scope is already read+write). |
+   | Xero | Add write scopes to the Custom Connection only for what you'll change (e.g. `accounting.invoices`, `accounting.manualjournals`, `accounting.banktransactions`). Re-authorise. |
+   | Intacct | Give the Web Services user's role Add/Edit on the specific objects (e.g. GL journal entries, AP bills). |
+   | NetSuite | Give the integration role Create/Edit on the specific record types (e.g. Make Journal Entry, Bills). Avoid Full and Delete permissions. |
+
+2. **Turn writes on for that book** in your own terminal (agents are blocked from this command):
+   ```bash
+   python -m engine writes acme on
+   ```
+3. **Test in a sandbox first.** Turn writes off when you're done: `python -m engine writes acme off`.
 
 ## Verify the connection
 

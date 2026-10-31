@@ -141,3 +141,49 @@ def normalize(book) -> None:
 
     n = write_csv(out / "gl_lines.csv", GL_COLUMNS, rows())
     print(f"Normalized {len(accounts)} accounts, {n} GL lines.")
+
+
+# --- writes (only via engine.changes, after approval) ------------------------
+NOTE_FIELD = {"customer": "comments", "vendor": "comments", "employee": "comments", "account": "description"}
+DATE_FIELDS = ("tranDate", "trandate")
+
+
+def write_client(book):
+    return Client(book)
+
+
+def _h(c):
+    return {"Authorization": f"Bearer {c.token()}", "Content-Type": "application/json"}
+
+
+def fetch(c, entity, rid):
+    return request("GET", f"{c.base}/record/v1/{entity}/{rid}", headers=_h(c)).json()
+
+
+def sign(op, before, tag) -> str:
+    field = NOTE_FIELD.get(op["entity"], "memo")
+    payload = op.setdefault("payload", {})
+    text = payload.get(field, (before or {}).get(field, "")) or ""
+    payload[field] = text if tag in text else f"{text} {tag}".strip()
+    return field
+
+
+def check(op) -> list:
+    errors = []
+    if op["op"] == "void":
+        errors.append("NetSuite void isn't exposed generically over REST; propose a reversing journalentry instead")
+    lines = (op.get("payload", {}).get("line") or {}).get("items")
+    if op["entity"] == "journalentry" and lines:
+        dr, cr = sum(num(l.get("debit")) for l in lines), sum(num(l.get("credit")) for l in lines)
+        if abs(dr - cr) > 0.005:
+            errors.append(f"Journal entry unbalanced: debits {dr:.2f} vs credits {cr:.2f}")
+    return errors
+
+
+def apply(c, op, grant) -> str:
+    url = f"{c.base}/record/v1/{op['entity']}"
+    if op["op"] == "create":
+        resp = request("POST", url, grant=grant, headers=_h(c), json=op["payload"])
+        return resp.headers.get("Location", "").rstrip("/").split("/")[-1]
+    request("PATCH", f"{url}/{op['id']}", grant=grant, headers=_h(c), json=op["payload"])
+    return op["id"]

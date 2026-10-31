@@ -141,3 +141,63 @@ def normalize(book) -> None:
     org = (load_json(raw / "organisation.json") or {}).get("Organisations", [{}])[0]
     (out / "erp_settings.json").write_text(json.dumps(org, indent=1))
     print(f"Normalized {len(accounts)} accounts, {n} GL lines.")
+
+
+# --- writes (only via engine.changes, after approval) ------------------------
+ID_KEY = {"Invoices": "InvoiceID", "CreditNotes": "CreditNoteID", "BankTransactions": "BankTransactionID",
+          "ManualJournals": "ManualJournalID", "Contacts": "ContactID", "Payments": "PaymentID", "Accounts": "AccountID",
+          "Items": "ItemID", "BankTransfers": "BankTransferID", "PurchaseOrders": "PurchaseOrderID"}
+VOID_STATUS = {"Invoices": "VOIDED", "CreditNotes": "VOIDED", "ManualJournals": "VOIDED",
+               "Payments": "DELETED", "BankTransactions": "DELETED"}
+HISTORY = set(ID_KEY) - {"Accounts"}
+DATE_FIELDS = ("Date",)
+
+
+def write_client(book):
+    return Client(book)
+
+
+def fetch(c, entity, rid):
+    return c.get(f"{entity}/{rid}")[entity][0]
+
+
+def sign(op, before, tag) -> str:
+    entity, payload = op["entity"], op.setdefault("payload", {})
+    if op["op"] == "void":
+        payload["Status"] = VOID_STATUS.get(entity, "VOIDED")
+    where = []
+    if entity == "ManualJournals":
+        text = payload.get("Narration", (before or {}).get("Narration", "")) or ""
+        payload["Narration"] = text if tag in text else f"{text} {tag}".strip()
+        where.append("Narration")
+    if entity in HISTORY:
+        op["history_note"] = f"{tag} {op.get('reason', '')}".strip()
+        where.append("History & Notes")
+    return " + ".join(where) or "audit log only (no notes field)"
+
+
+def check(op) -> list:
+    errors = []
+    if op["entity"] not in ID_KEY:
+        errors.append(f"Unsupported Xero endpoint {op['entity']} (use one of {sorted(ID_KEY)})")
+    if op["op"] == "void" and op["entity"] not in VOID_STATUS:
+        errors.append(f"Xero cannot void {op['entity']}")
+    lines = op.get("payload", {}).get("JournalLines")
+    if op["entity"] == "ManualJournals" and lines and abs(sum(num(l.get("LineAmount")) for l in lines)) > 0.005:
+        errors.append("Manual journal unbalanced: JournalLines LineAmount must sum to 0")
+    return errors
+
+
+def apply(c, op, grant) -> str:
+    entity = op["entity"]
+    h = {"Authorization": f"Bearer {c.token()}", "Accept": "application/json"}
+    body = {entity: [op["payload"]]}
+    if op["op"] == "create":
+        rec = request("PUT", f"{API}/{entity}", grant=grant, headers=h, json=body).json()[entity][0]
+    else:
+        rec = request("POST", f"{API}/{entity}/{op['id']}", grant=grant, headers=h, json=body).json()[entity][0]
+    rid = rec.get(ID_KEY[entity]) or op.get("id")
+    if op.get("history_note"):
+        request("PUT", f"{API}/{entity}/{rid}/History", grant=grant, headers=h,
+                json={"HistoryRecords": [{"Details": op["history_note"][:450]}]})
+    return rid

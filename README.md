@@ -11,7 +11,7 @@ Agent-agnostic: instructions live in [AGENTS.md](AGENTS.md), which Codex, Cursor
 ## Quick start
 
 ```bash
-git clone https://github.com/<owner>/agentic-ledger.git && cd agentic-ledger
+git clone https://github.com/j0m1st/agentic-ledger.git && cd agentic-ledger
 python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 git config core.hooksPath .githooks              # blocks accidental commits of books/ data
 python -m engine new acme --erp qbo               # creates books/acme/ (qbo | xero | intacct | netsuite)
@@ -38,6 +38,7 @@ setup/CONNECT.md          connecting each ERP: MCP connector or direct API, secu
 playbooks/
   reverse-engineer.md     step 1: derive conventions from the live books
   request-info.md         email people for missing info (Resend, approval per email)
+  write-changes.md        write to the ERP: preview → approve → apply → report
 engine/                   source: Python ERP clients, extract → normalize → profile, email
 templates/book/           copied into each new book folder
 books/<slug>/             YOUR data and notes (git-ignored, never pushed)
@@ -61,7 +62,13 @@ books/<slug>/             YOUR data and notes (git-ignored, never pushed)
 
 ## Safety
 
-- **Read-only ERP access.** The engine's HTTP layer refuses anything except GET and known query/token POSTs, and the agent rules forbid write tools on MCP connectors. Use view-only roles and read scopes too.
+- **Read-only by default.** The engine's HTTP layer refuses any write unless it comes from an approved change set.
+- **Writes (opt-in)** via API or MCP follow [playbooks/write-changes.md](playbooks/write-changes.md):
+  1. 🚨 a full before → after preview of every change, with nothing written yet
+  2. ✅ clear approval: you reply `approve <code>`, bound to that exact preview
+  3. 📋 an after-report: ✅ done / ❌ error / 🚨 outcome unknown / ⏭️ not done
+
+  Every written record is signed `[ag write/edit]` in its memo/notes, and every attempt is logged to `changes/audit.jsonl`. Hard deletes are never allowed. Writes stay off until the owner runs `python -m engine writes <slug> on` in a terminal.
 - **Secrets** live in the OS keychain (or env vars injected by 1Password, Doppler, or similar), never in files or chat.
 - **Email** goes out only via `engine email-send`, only to `context/contacts.csv` rows with `can_email = yes`, and only after you approve each draft (Claude Code also asks for permission on every send).
 

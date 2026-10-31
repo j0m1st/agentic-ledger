@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BOOKS_DIR = ROOT / "books"
 TEMPLATE_DIR = ROOT / "templates" / "book"
 ERPS = ("qbo", "xero", "intacct", "netsuite")
-DATA_DIRS = ("raw", "normalized", "analysis", "work", "outbox")
+DATA_DIRS = ("raw", "normalized", "analysis", "work", "outbox", "changes")
 
 
 class Book:
@@ -48,5 +48,6 @@ def create(slug: str, erp: str) -> Book:
     for d in DATA_DIRS:
         (path / d).mkdir(exist_ok=True)
     (path / "book.json").write_text(json.dumps(
-        {"slug": slug, "erp": erp, "created": date.today().isoformat()}, indent=2) + "\n")
+        {"slug": slug, "erp": erp, "created": date.today().isoformat(),
+         "writes_enabled": False, "sign_tag": "[ag write/edit]", "large_amount_threshold": 10000}, indent=2) + "\n")
     return Book(slug)

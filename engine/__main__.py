@@ -8,12 +8,12 @@ import subprocess
 import sys
 from datetime import date
 
-from . import books, mail, vault
+from . import books, changes, mail, vault
 from .erp import load
 
 
 def main(argv=None) -> None:
-    p = argparse.ArgumentParser(prog="python -m engine", description="Agentic Ledger engine (read-only ERP access).")
+    p = argparse.ArgumentParser(prog="python -m engine", description="Agentic Ledger engine (read-only by default; writes only via approved change sets).")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     n = sub.add_parser("new", help="create books/<slug>/ from templates")
@@ -38,6 +38,26 @@ def main(argv=None) -> None:
         m.add_argument("draft_id")
         if name == "email-send":
             m.add_argument("--yes", action="store_true", help="user already approved this exact draft")
+
+    w = sub.add_parser("writes", help="owner only: enable/disable ERP writes for this book (interactive)")
+    w.add_argument("book")
+    w.add_argument("state", choices=("on", "off"))
+
+    for name, desc in (("changes-plan", "validate, sign and preview a change set (writes nothing)"),
+                       ("changes-approve", "MCP mode: mark the previewed plan approved (needs the approval code)"),
+                       ("changes-apply", "API mode: apply an approved change set, then report results"),
+                       ("changes-record", "MCP mode: record the outcome of one operation"),
+                       ("changes-report", "MCP mode: finish and print the result report")):
+        c = sub.add_parser(name, help=desc)
+        c.add_argument("book")
+        c.add_argument("changeset")
+        if name in ("changes-approve", "changes-apply"):
+            c.add_argument("--approve", required=True, metavar="CODE", help="approval code the user approved")
+        if name == "changes-record":
+            c.add_argument("n", type=int)
+            c.add_argument("--status", required=True, choices=("done", "error", "unknown", "not_done"))
+            c.add_argument("--ref", default="")
+            c.add_argument("--message", default="")
 
     e = sub.add_parser("exec", help="run a command (e.g. a local MCP server) with this book's secrets as env vars")
     e.add_argument("book")
@@ -74,6 +94,21 @@ def main(argv=None) -> None:
         print("OK: ready for user approval." if not problems else "Problems:\n- " + "\n- ".join(problems))
     elif a.cmd == "email-send":
         mail.send(b, a.draft_id, yes=a.yes)
+    elif a.cmd == "writes":
+        changes.set_writes(b, a.state == "on")
+    elif a.cmd.startswith("changes-"):
+        cs = changes.ChangeSet(b, a.changeset)
+        if a.cmd == "changes-plan":
+            cs.plan()
+        elif a.cmd == "changes-approve":
+            cs.approve(a.approve)
+        elif a.cmd == "changes-apply":
+            plan = cs.apply(a.approve)
+            sys.exit(0 if plan["status"] == "applied" else 1)
+        elif a.cmd == "changes-record":
+            cs.record(a.n, a.status, a.ref, a.message)
+        else:
+            cs.finish()
     elif a.cmd == "exec":
         cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
         if not cmd:

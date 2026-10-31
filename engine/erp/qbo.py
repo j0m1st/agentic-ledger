@@ -164,3 +164,66 @@ def normalize(book) -> None:
     prefs = load_json(raw / "preferences.json") or {}
     (out / "erp_settings.json").write_text(json.dumps(prefs.get("Preferences", prefs), indent=1))
     print(f"Normalized {len(accounts)} accounts, {n} GL lines.")
+
+
+# --- writes (only via engine.changes, after approval) ------------------------
+VOIDABLE = {"Invoice", "Payment", "SalesReceipt", "BillPayment"}
+NOTE_FIELD = {"Customer": "Notes", "Vendor": "Notes", "Employee": "Notes", "Account": "Description", "Item": "Description"}
+UNSIGNABLE = {"Class", "Department", "Term", "TaxCode"}
+DATE_FIELDS = ("TxnDate",)
+
+
+def write_client(book):
+    return Client(book)
+
+
+def fetch(c, entity, rid):
+    return c.get(f"{entity.lower()}/{rid}")[entity]
+
+
+def _append(text, tag):
+    text = text or ""
+    return text if tag in text else f"{text} {tag}".strip()
+
+
+def sign(op, before, tag) -> str:
+    entity, payload = op["entity"], op.setdefault("payload", {})
+    if entity in UNSIGNABLE:
+        return "audit log only (no memo field)"
+    field = NOTE_FIELD.get(entity, "PrivateNote")
+    payload[field] = _append(payload.get(field, (before or {}).get(field)), tag)
+    if entity == "JournalEntry" and op["op"] == "create":
+        for line in payload.get("Line", []):  # line Description is the GL "memo" column
+            line["Description"] = _append(line.get("Description"), tag)
+        return f"{field} + every line Description"
+    return field
+
+
+def check(op) -> list:
+    errors = []
+    if op["op"] == "void" and op["entity"] not in VOIDABLE:
+        errors.append(f"QBO cannot void {op['entity']}; propose a reversing JournalEntry or credit instead")
+    if op["entity"] == "JournalEntry" and op.get("payload", {}).get("Line"):
+        side = {"Debit": 0.0, "Credit": 0.0}
+        for line in op["payload"]["Line"]:
+            d = line.get("JournalEntryLineDetail", {})
+            side[d.get("PostingType", "Debit")] += num(line.get("Amount"))
+        if abs(side["Debit"] - side["Credit"]) > 0.005:
+            errors.append(f"Journal entry unbalanced: debits {side['Debit']:.2f} vs credits {side['Credit']:.2f}")
+    return errors
+
+
+def apply(c, op, grant) -> str:
+    entity, path = op["entity"], op["entity"].lower()
+    url = f"{c.base}/v3/company/{c.realm}/{path}"
+    h = lambda: {"Authorization": f"Bearer {c.token()}", "Accept": "application/json"}
+    p = {"minorversion": MINOR_VERSION}
+    if op["op"] == "create":
+        return request("POST", url, grant=grant, params=p, headers=h(), json=op["payload"]).json()[entity]["Id"]
+    current = fetch(c, entity, op["id"])
+    body = {"Id": op["id"], "SyncToken": current["SyncToken"], "sparse": True, **op.get("payload", {})}
+    updated = request("POST", url, grant=grant, params=p, headers=h(), json=body).json()[entity]
+    if op["op"] == "void":  # memo signed by the sparse update above, then void
+        request("POST", url, grant=grant, params={**p, "operation": "void"}, headers=h(),
+                json={"Id": op["id"], "SyncToken": updated["SyncToken"]})
+    return op["id"]

@@ -170,3 +170,49 @@ def normalize(book) -> None:
     n = write_csv(out / "gl_lines.csv", GL_COLUMNS, rows())
     (out / "erp_settings.json").write_text(json.dumps({"company_id": book.config.get("company_id")}))
     print(f"Normalized {len(accounts)} accounts, {n} GL lines.")
+
+
+# --- writes (only via engine.changes, after approval) ------------------------
+# Memo-like field per object; "description" where unsure. Verify against /services/core/model before first use.
+NOTE_FIELD = {"general-ledger/journal-entry": "description", "accounts-payable/bill": "description",
+              "accounts-receivable/invoice": "description", "accounts-payable/vendor": "notes",
+              "accounts-receivable/customer": "notes"}
+DATE_FIELDS = ("postingDate", "entryDate", "invoiceDate", "billDate")
+
+
+def write_client(book):
+    return Client(book)
+
+
+def fetch(c, entity, rid):
+    return request("GET", f"{BASE}/objects/{entity}/{rid}", headers=c._h()).json().get("ia::result", {})
+
+
+def sign(op, before, tag) -> str:
+    field = NOTE_FIELD.get(op["entity"], "description")
+    payload = op.setdefault("payload", {})
+    text = payload.get(field, (before or {}).get(field, "")) or ""
+    payload[field] = text if tag in text else f"{text} {tag}".strip()
+    return field
+
+
+def check(op) -> list:
+    errors = []
+    if op["op"] == "void":
+        errors.append("Intacct void/reversal isn't wired generically; propose a reversing journal-entry instead")
+    lines = op.get("payload", {}).get("lines")
+    if op["entity"] == "general-ledger/journal-entry" and lines:
+        net = sum(num(l.get("txnAmount")) * (-1 if str(l.get("txnType", "")).lower() == "credit" else 1) for l in lines)
+        if abs(net) > 0.005:
+            errors.append(f"Journal entry unbalanced by {net:.2f}")
+    return errors
+
+
+def apply(c, op, grant) -> str:
+    url = f"{BASE}/objects/{op['entity']}"
+    h = {**c._h(), "Content-Type": "application/json"}
+    if op["op"] == "create":
+        res = request("POST", url, grant=grant, headers=h, json=op["payload"]).json().get("ia::result", {})
+        return str(res.get("key") or res.get("id") or "")
+    request("PATCH", f"{url}/{op['id']}", grant=grant, headers=h, json=op["payload"])
+    return op["id"]

@@ -4,6 +4,12 @@
       "Bash(python -m engine email-send:*)",
       "Bash(python3 -m engine email-send:*)",
       "Bash(.venv/bin/python -m engine email-send:*)",
+      "Bash(python -m engine changes-apply:*)",
+      "Bash(python3 -m engine changes-apply:*)",
+      "Bash(.venv/bin/python -m engine changes-apply:*)",
+      "Bash(python -m engine changes-approve:*)",
+      "Bash(python3 -m engine changes-approve:*)",
+      "Bash(.venv/bin/python -m engine changes-approve:*)",
       "Bash(git push:*)"
     ],
     "deny": [
@@ -12,7 +18,10 @@
       "Read(./**/*.pem)",
       "Read(./**/*.key)",
       "Bash(git add -f:*)",
-      "Bash(git add --force:*)"
+      "Bash(git add --force:*)",
+      "Bash(python -m engine writes:*)",
+      "Bash(python3 -m engine writes:*)",
+      "Bash(.venv/bin/python -m engine writes:*)"
     ]
   }
 }
